@@ -99,7 +99,34 @@ struct MapHomeView: View {
                         MapPolyline(coordinates: activeRoutePath)
                             .stroke(.white.opacity(0.14), style: StrokeStyle(lineWidth: 5, lineCap: .round))
 
-                        waypointColoredRouteOverlay(for: activeRoutePath)
+                        ForEach(segmentOverlays(for: activeRoutePath)) { segment in
+                            MapPolyline(coordinates: segment.coordinates)
+                                .stroke(segment.color, lineWidth: 6)
+
+                            if let speedLabel = segment.speedLabel {
+                                Annotation("Speed", coordinate: segment.labelCoordinate, anchor: .center) {
+                                    Text(speedLabel)
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(segment.color)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(.ultraThinMaterial, in: Capsule())
+                                        .overlay(Capsule().stroke(segment.color.opacity(0.35), lineWidth: 1))
+                                }
+                            }
+
+                            if let pauseLabel = segment.pauseLabel, let pauseCoordinate = segment.pauseCoordinate {
+                                Annotation("Pause", coordinate: pauseCoordinate, anchor: .bottom) {
+                                    Text(pauseLabel)
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(.red)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 5)
+                                        .background(.ultraThinMaterial, in: Capsule())
+                                        .overlay(Capsule().stroke(.red.opacity(0.4), lineWidth: 1))
+                                }
+                            }
+                        }
                     }
 
                     if drawnPath.count > 1 {
@@ -164,14 +191,28 @@ struct MapHomeView: View {
         routeCoords.isEmpty ? drawnPath : routeCoords
     }
 
-    @ViewBuilder
-    private func waypointColoredRouteOverlay(for path: [CLLocationCoordinate2D]) -> some View {
-        guard path.count > 1 else { return }
+    private struct SegmentOverlay: Identifiable {
+        let id = UUID()
+        let coordinates: [CLLocationCoordinate2D]
+        let color: Color
+
+        let labelCoordinate: CLLocationCoordinate2D
+        let speedLabel: String?
+
+        let pauseCoordinate: CLLocationCoordinate2D?
+        let pauseLabel: String?
+    }
+
+    private func segmentOverlays(for path: [CLLocationCoordinate2D]) -> [SegmentOverlay] {
+        guard path.count > 1 else { return [] }
 
         let normalized = RouteBuilder.normalizedWaypoints(routeWaypoints, pathCount: path.count)
-        guard let first = normalized.first, first.pathIndex == 0 else { return }
+        guard let first = normalized.first, first.pathIndex == 0 else { return [] }
 
         let baseMPH = session.travelMode.baseSpeed * 2.23693629
+        var overlays: [SegmentOverlay] = []
+        overlays.reserveCapacity(normalized.count)
+
         var prevIndex = 0
         var lastMoveMPH = baseMPH
 
@@ -185,37 +226,34 @@ struct MapHomeView: View {
             let moveMPH = waypoint.isPause ? lastMoveMPH : (waypoint.speedMPH ?? baseMPH)
             let color = colorForSpeed(moveMPH)
             let coordsSlice = Array(path[prevIndex...endIndex])
-            MapPolyline(coordinates: coordsSlice)
-                .stroke(color, lineWidth: 6)
 
             let midIndex = (prevIndex + endIndex) / 2
-            Annotation("Speed", coordinate: path[midIndex], anchor: .center) {
-                Text(String(format: "%.0f mph", moveMPH))
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(color)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .overlay(Capsule().stroke(color.opacity(0.35), lineWidth: 1))
-            }
+            let speedLabel = waypoint.isPause ? nil : String(format: "%.0f mph", moveMPH)
 
-            if waypoint.isPause, let seconds = waypoint.pauseSeconds {
-                Annotation("Pause", coordinate: path[endIndex], anchor: .bottom) {
-                    Text(String(format: "PAUSE %.1fs", seconds))
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.red)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .overlay(Capsule().stroke(.red.opacity(0.4), lineWidth: 1))
-                }
-            }
+            let pauseCoordinate: CLLocationCoordinate2D? = waypoint.isPause ? path[endIndex] : nil
+            let pauseLabel: String? = {
+                guard waypoint.isPause, let seconds = waypoint.pauseSeconds else { return nil }
+                return String(format: "PAUSE %.1fs", seconds)
+            }()
+
+            overlays.append(
+                SegmentOverlay(
+                    coordinates: coordsSlice,
+                    color: color,
+                    labelCoordinate: path[midIndex],
+                    speedLabel: speedLabel,
+                    pauseCoordinate: pauseCoordinate,
+                    pauseLabel: pauseLabel
+                )
+            )
 
             if !waypoint.isPause {
                 lastMoveMPH = moveMPH
             }
             prevIndex = endIndex
         }
+
+        return overlays
     }
 
     private func colorForSpeed(_ mph: Double) -> Color {
