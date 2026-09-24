@@ -5,13 +5,27 @@ import MapKit
 struct RouteWaypoint: Identifiable, Hashable {
     let id: UUID
     var pathIndex: Int
-    var speedMultiplier: Double
+    /// Desired movement speed for the segment leading into this waypoint.
+    /// - When nil: use the default speed for the selected travel mode.
+    var speedMPH: Double?
 
-    init(id: UUID = UUID(), pathIndex: Int, speedMultiplier: Double = 1.0) {
+    /// When set: the player will pause on arrival at this waypoint for the given duration.
+    /// Pause waypoints ignore speedMPH.
+    var pauseSeconds: Double?
+
+    init(
+        id: UUID = UUID(),
+        pathIndex: Int,
+        speedMPH: Double? = nil,
+        pauseSeconds: Double? = nil
+    ) {
         self.id = id
         self.pathIndex = pathIndex
-        self.speedMultiplier = speedMultiplier
+        self.speedMPH = speedMPH
+        self.pauseSeconds = pauseSeconds
     }
+
+    var isPause: Bool { pauseSeconds != nil && (pauseSeconds ?? 0) > 0 }
 }
 
 enum RouteBuilder {
@@ -37,11 +51,11 @@ enum RouteBuilder {
     static func defaultWaypoints(for coordinates: [CLLocationCoordinate2D]) -> [RouteWaypoint] {
         guard !coordinates.isEmpty else { return [] }
         guard coordinates.count > 1 else {
-            return [RouteWaypoint(pathIndex: 0, speedMultiplier: 1.0)]
+            return [RouteWaypoint(pathIndex: 0)]
         }
         return [
-            RouteWaypoint(pathIndex: 0, speedMultiplier: 1.0),
-            RouteWaypoint(pathIndex: coordinates.count - 1, speedMultiplier: 1.0),
+            RouteWaypoint(pathIndex: 0),
+            RouteWaypoint(pathIndex: coordinates.count - 1)
         ]
     }
 
@@ -53,7 +67,8 @@ enum RouteBuilder {
                 RouteWaypoint(
                     id: waypoint.id,
                     pathIndex: min(max(0, waypoint.pathIndex), pathCount - 1),
-                    speedMultiplier: waypoint.speedMultiplier
+                    speedMPH: waypoint.speedMPH,
+                    pauseSeconds: waypoint.pauseSeconds
                 )
             }
             .sorted { $0.pathIndex < $1.pathIndex }
@@ -69,24 +84,24 @@ enum RouteBuilder {
 
         if deduped.isEmpty {
             if pathCount == 1 {
-                return [RouteWaypoint(pathIndex: 0, speedMultiplier: 1.0)]
+                return [RouteWaypoint(pathIndex: 0)]
             }
             return [
-                RouteWaypoint(pathIndex: 0, speedMultiplier: 1.0),
-                RouteWaypoint(pathIndex: pathCount - 1, speedMultiplier: 1.0),
+                RouteWaypoint(pathIndex: 0),
+                RouteWaypoint(pathIndex: pathCount - 1)
             ]
         }
 
         if deduped.first?.pathIndex != 0 {
             deduped.insert(
-                RouteWaypoint(pathIndex: 0, speedMultiplier: deduped.first?.speedMultiplier ?? 1.0),
+                RouteWaypoint(pathIndex: 0, speedMPH: deduped.first?.speedMPH, pauseSeconds: deduped.first?.pauseSeconds),
                 at: 0
             )
         }
 
         if deduped.last?.pathIndex != pathCount - 1 {
             deduped.append(
-                RouteWaypoint(pathIndex: pathCount - 1, speedMultiplier: deduped.last?.speedMultiplier ?? 1.0)
+                RouteWaypoint(pathIndex: pathCount - 1, speedMPH: deduped.last?.speedMPH, pauseSeconds: deduped.last?.pauseSeconds)
             )
         }
 

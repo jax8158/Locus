@@ -95,17 +95,13 @@ struct MapHomeView: View {
                             }
                         }
                     }
-                    if routeCoords.count > 1 {
-                        MapPolyline(coordinates: routeCoords)
-                            .stroke(LocusTheme.accent, lineWidth: 5)
+                    if activeRoutePath.count > 1 {
+                        MapPolyline(coordinates: activeRoutePath)
+                            .stroke(.white.opacity(0.14), style: StrokeStyle(lineWidth: 5, lineCap: .round))
+
+                        waypointColoredRouteOverlay(for: activeRoutePath)
                     }
-                    ForEach(routeWaypoints) { waypoint in
-                        if let coordinate = waypointCoordinate(for: waypoint) {
-                            Annotation("Waypoint", coordinate: coordinate, anchor: .bottom) {
-                                waypointMarker(waypoint)
-                            }
-                        }
-                    }
+
                     if drawnPath.count > 1 {
                         MapPolyline(coordinates: drawnPath)
                             .stroke(LocusTheme.accentSecondary, style: StrokeStyle(lineWidth: 4, dash: [6, 4]))
@@ -156,7 +152,8 @@ struct MapHomeView: View {
                     drawnPath.removeAll()
                     drawMode = false
                 },
-                onAddWaypointAtPin: addWaypointAtPin,
+                onAddSpeedWaypointAtPin: addSpeedWaypointAtPin,
+                onAddPauseWaypointAtPin: addPauseWaypointAtPin,
                 onResetWaypoints: resetWaypoints
             )
             .presentationDetents([.medium, .large])
@@ -165,6 +162,69 @@ struct MapHomeView: View {
 
     private var activeRoutePath: [CLLocationCoordinate2D] {
         routeCoords.isEmpty ? drawnPath : routeCoords
+    }
+
+    @ViewBuilder
+    private func waypointColoredRouteOverlay(for path: [CLLocationCoordinate2D]) -> some View {
+        guard path.count > 1 else { return }
+
+        let normalized = RouteBuilder.normalizedWaypoints(routeWaypoints, pathCount: path.count)
+        guard let first = normalized.first, first.pathIndex == 0 else { return }
+
+        let baseMPH = session.travelMode.baseSpeed * 2.23693629
+        var prevIndex = 0
+        var lastMoveMPH = baseMPH
+
+        for waypoint in normalized.dropFirst() {
+            let endIndex = waypoint.pathIndex
+            guard endIndex > prevIndex, endIndex < path.count else {
+                prevIndex = max(prevIndex, endIndex)
+                continue
+            }
+
+            let moveMPH = waypoint.isPause ? lastMoveMPH : (waypoint.speedMPH ?? baseMPH)
+            let color = colorForSpeed(moveMPH)
+            let coordsSlice = Array(path[prevIndex...endIndex])
+            MapPolyline(coordinates: coordsSlice)
+                .stroke(color, lineWidth: 6)
+
+            let midIndex = (prevIndex + endIndex) / 2
+            Annotation("Speed", coordinate: path[midIndex], anchor: .center) {
+                Text(String(format: "%.0f mph", moveMPH))
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(color)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay(Capsule().stroke(color.opacity(0.35), lineWidth: 1))
+            }
+
+            if waypoint.isPause, let seconds = waypoint.pauseSeconds {
+                Annotation("Pause", coordinate: path[endIndex], anchor: .bottom) {
+                    Text(String(format: "PAUSE %.1fs", seconds))
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .overlay(Capsule().stroke(.red.opacity(0.4), lineWidth: 1))
+                }
+            }
+
+            if !waypoint.isPause {
+                lastMoveMPH = moveMPH
+            }
+            prevIndex = endIndex
+        }
+    }
+
+    private func colorForSpeed(_ mph: Double) -> Color {
+        let minMph = 0.0
+        let maxMph = 70.0
+        let t = max(0, min(1, (mph - minMph) / (maxMph - minMph)))
+        // Green (slow) -> Red (fast)
+        let hue = 0.33 * (1.0 - t)
+        return Color(hue: hue, saturation: 0.85, brightness: 0.95)
     }
 
     private func placePin(at point: CGPoint, proxy: MapProxy) {
@@ -439,7 +499,7 @@ struct MapHomeView: View {
         }
     }
 
-    private func addWaypointAtPin() {
+    private func addSpeedWaypointAtPin() {
         let path = activeRoutePath
         guard path.count > 1 else {
             session.lastError = "Build or draw a route first."
@@ -451,10 +511,35 @@ struct MapHomeView: View {
         }
 
         let index = RouteBuilder.nearestIndex(in: path, to: coordinate)
-        let waypoint = RouteWaypoint(pathIndex: index, speedMultiplier: 1.0)
+        let baseMPH = session.travelMode.baseSpeed * 2.23693629
+        let waypoint = RouteWaypoint(pathIndex: index, speedMPH: baseMPH)
 
         if let existing = routeWaypoints.firstIndex(where: { $0.pathIndex == index }) {
-            routeWaypoints[existing] = waypoint
+            routeWaypoints[existing].speedMPH = waypoint.speedMPH
+            routeWaypoints[existing].pauseSeconds = nil
+        } else {
+            routeWaypoints.append(waypoint)
+            routeWaypoints.sort { $0.pathIndex < $1.pathIndex }
+        }
+    }
+
+    private func addPauseWaypointAtPin() {
+        let path = activeRoutePath
+        guard path.count > 1 else {
+            session.lastError = "Build or draw a route first."
+            return
+        }
+        guard let coordinate = session.pin ?? session.simulated ?? session.realCoordinate else {
+            session.lastError = "Drop a pin first, then add the waypoint."
+            return
+        }
+
+        let index = RouteBuilder.nearestIndex(in: path, to: coordinate)
+        let waypoint = RouteWaypoint(pathIndex: index, speedMPH: nil, pauseSeconds: 3.0)
+
+        if let existing = routeWaypoints.firstIndex(where: { $0.pathIndex == index }) {
+            routeWaypoints[existing].pauseSeconds = waypoint.pauseSeconds
+            routeWaypoints[existing].speedMPH = nil
         } else {
             routeWaypoints.append(waypoint)
             routeWaypoints.sort { $0.pathIndex < $1.pathIndex }
@@ -472,11 +557,18 @@ struct MapHomeView: View {
 
     private func waypointMarker(_ waypoint: RouteWaypoint) -> some View {
         ZStack {
-            Circle().fill(LocusTheme.accentSecondary.opacity(0.9)).frame(width: 26, height: 26)
+            Circle().fill(waypoint.isPause ? .red.opacity(0.9) : LocusTheme.accentSecondary.opacity(0.9))
+                .frame(width: 26, height: 26)
             Circle().stroke(.white, lineWidth: 2).frame(width: 26, height: 26)
-            Text(waypoint.speedMultiplier >= 1.0 ? "↑" : "↓")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.white)
+            if waypoint.isPause {
+                Text("II")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+            } else {
+                Text(waypoint.speedMPH == nil ? "•" : "\(Int(waypoint.speedMPH ?? 0))")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+            }
         }
         .shadow(radius: 4)
     }

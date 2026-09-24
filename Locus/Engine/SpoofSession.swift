@@ -188,6 +188,9 @@ final class SpoofSession: ObservableObject {
         let playbackWaypoints = RouteBuilder.normalizedWaypoints(waypoints, pathCount: coordinates.count)
         routeTask = Task { [weak self] in
             guard let self else { return }
+            // Default movement speed (MPH) from travel mode.
+            let baseMPH = mode.baseSpeed * 2.23693629
+            var currentMoveSpeedMPH = baseMPH
             var previousIndex = 0
             await MainActor.run {
                 self.apply(coordinates[0], pairing: pairing, markRecent: true)
@@ -197,8 +200,16 @@ final class SpoofSession: ObservableObject {
                 let targetIndex = max(previousIndex + 1, waypoint.pathIndex)
                 guard targetIndex < coordinates.count else { break }
 
-                var speed = mode.baseSpeed * max(0.25, waypoint.speedMultiplier)
-                speed *= Double.random(in: 0.88...1.12)
+                if waypoint.isPause {
+                    // Pause waypoints do not set a movement speed; use the last known
+                    // movement speed for the segment leading into the pause.
+                } else {
+                    currentMoveSpeedMPH = waypoint.speedMPH ?? baseMPH
+                }
+
+                // Convert MPH to meters/sec.
+                let baseSpeedMps = max(0.2, currentMoveSpeedMPH / 2.23693629)
+                let variedSpeedMps = baseSpeedMps * Double.random(in: 0.9...1.1)
 
                 for index in (previousIndex + 1)...targetIndex {
                     if Task.isCancelled { break }
@@ -206,10 +217,18 @@ final class SpoofSession: ObservableObject {
                     let next = coordinates[index]
                     let distance = CLLocation(latitude: previous.latitude, longitude: previous.longitude)
                         .distance(from: CLLocation(latitude: next.latitude, longitude: next.longitude))
-                    let delay = max(0.15, distance / max(0.5, speed))
+
+                    let delay = max(0.15, distance / max(0.2, variedSpeedMps))
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     await MainActor.run {
                         self.apply(next, pairing: pairing, markRecent: false)
+                    }
+                }
+
+                if waypoint.isPause, let pause = waypoint.pauseSeconds {
+                    let seconds = max(0, pause)
+                    if seconds > 0 {
+                        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
                     }
                 }
                 previousIndex = targetIndex

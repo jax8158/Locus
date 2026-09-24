@@ -12,7 +12,8 @@ struct RoutePlannerSheet: View {
     var onImportGPX: () -> Void
     var onExportGPX: () -> Void
     var onUseDrawn: () -> Void
-    var onAddWaypointAtPin: () -> Void
+    var onAddSpeedWaypointAtPin: () -> Void
+    var onAddPauseWaypointAtPin: () -> Void
     var onResetWaypoints: () -> Void
 
     @EnvironmentObject private var session: SpoofSession
@@ -47,21 +48,28 @@ struct RoutePlannerSheet: View {
                 }
 
                 Section("Waypoints") {
-                    Text("Drop a waypoint before a stop sign, light, or highway merge. The speed on each waypoint controls the segment leading into it.")
+                    Text("Drop a waypoint before a stop sign, light, or highway merge. Speed waypoints control how fast the segment leading into them moves. Pause waypoints stop on arrival for the set duration.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
                     Button {
-                        onAddWaypointAtPin()
+                        onAddSpeedWaypointAtPin()
                     } label: {
-                        Label("Add waypoint at pin", systemImage: "mappin.and.ellipse")
+                        Label("Add speed waypoint", systemImage: "speedometer")
+                    }
+                    .disabled(routePath.count < 2)
+
+                    Button {
+                        onAddPauseWaypointAtPin()
+                    } label: {
+                        Label("Add pause waypoint", systemImage: "pause.circle")
                     }
                     .disabled(routePath.count < 2)
 
                     Button(role: .destructive) {
                         onResetWaypoints()
                     } label: {
-                        Label("Reset waypoint speeds", systemImage: "arrow.counterclockwise")
+                        Label("Reset waypoint settings", systemImage: "arrow.counterclockwise")
                     }
                     .disabled(routePath.count < 2)
 
@@ -80,25 +88,74 @@ struct RoutePlannerSheet: View {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(isStart ? "Start" : isEnd ? "Destination" : "Waypoint \(index + 1)")
                                             .font(.subheadline.weight(.semibold))
-                                        Text(isStart ? "Route anchor" : waypointLabel(waypoint))
+                                        Text(isStart
+                                             ? "Route anchor"
+                                             : (waypoint.isPause
+                                                ? "Pause: \(String(format: "%.1f", waypoint.pauseSeconds ?? 0))s"
+                                                : waypointLabel(waypoint)))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+
+                                    if !isStart {
+                                        Text(waypoint.isPause
+                                             ? "PAUSE"
+                                             : (waypoints[index].speedMPH == nil
+                                                ? "AUTO"
+                                                : "\(String(format: "%.0f", waypoints[index].speedMPH ?? 0))mph"))
+                                        .font(.subheadline.weight(.semibold))
+                                        .monospacedDigit()
+                                    }
+                                }
+
+                                Toggle("Pause on arrival", isOn: Binding(
+                                    get: { waypoints[index].isPause },
+                                    set: { newValue in
+                                        if isStart { return }
+                                        if newValue {
+                                            waypoints[index].pauseSeconds = waypoints[index].pauseSeconds ?? 3.0
+                                            waypoints[index].speedMPH = nil
+                                        } else {
+                                            waypoints[index].pauseSeconds = nil
+                                            if waypoints[index].speedMPH == nil {
+                                                waypoints[index].speedMPH = session.travelMode.baseSpeed * 2.23693629
+                                            }
+                                        }
+                                    }
+                                ))
+                                .disabled(isStart)
+
+                                if waypoints[index].isPause {
+                                    Stepper(
+                                        value: Binding(
+                                            get: { waypoints[index].pauseSeconds ?? 3.0 },
+                                            set: { waypoints[index].pauseSeconds = $0 }
+                                        ),
+                                        in: 0.5...30,
+                                        step: 0.5
+                                    ) {
+                                        Text("Duration: \(String(format: "%.1f", waypoints[index].pauseSeconds ?? 0))s")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                     }
-                                    Spacer()
-                                    Text(String(format: "%.2fx", waypoint.speedMultiplier))
-                                        .font(.subheadline.weight(.semibold))
-                                        .monospacedDigit()
-                                }
+                                } else {
+                                    Slider(
+                                        value: Binding(
+                                            get: { waypoints[index].speedMPH ?? 0 },
+                                            set: { newValue in
+                                                waypoints[index].speedMPH = newValue <= 0 ? nil : newValue
+                                            }
+                                        ),
+                                        in: 0...70,
+                                        step: 0.5
+                                    )
+                                    .disabled(isStart)
 
-                                Slider(
-                                    value: Binding(
-                                        get: { waypoints[index].speedMultiplier },
-                                        set: { waypoints[index].speedMultiplier = $0 }
-                                    ),
-                                    in: 0.4...2.5,
-                                    step: 0.05
-                                )
-                                .disabled(isStart)
+                                    Text("Speed: \(waypoints[index].speedMPH == nil ? \"AUTO\" : String(format: \"%.1f\", waypoints[index].speedMPH ?? 0)) mph")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
 
                                 if !isStart && !isEnd {
                                     Button(role: .destructive) {
