@@ -2,6 +2,18 @@ import CoreLocation
 import Foundation
 import MapKit
 
+struct RouteWaypoint: Identifiable, Hashable {
+    let id: UUID
+    var pathIndex: Int
+    var speedMultiplier: Double
+
+    init(id: UUID = UUID(), pathIndex: Int, speedMultiplier: Double = 1.0) {
+        self.id = id
+        self.pathIndex = pathIndex
+        self.speedMultiplier = speedMultiplier
+    }
+}
+
 enum RouteBuilder {
     static func roadRoute(
         from start: CLLocationCoordinate2D,
