@@ -152,7 +152,10 @@ struct RoutePlannerSheet: View {
                                     )
                                     .disabled(isStart)
 
-                                    Text("Speed: \(waypoints[index].speedMPH == nil ? \"AUTO\" : String(format: \"%.1f\", waypoints[index].speedMPH ?? 0)) mph")
+                                    let speedText = waypoints[index].speedMPH == nil
+                                        ? "AUTO"
+                                        : String(format: "%.1f", waypoints[index].speedMPH ?? 0)
+                                    Text("Speed: \(speedText) mph")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
