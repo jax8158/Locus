@@ -23,30 +23,17 @@ struct LocusGlassModifier<S: Shape>: ViewModifier {
     var tint: Color?
 
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content
-                .glassEffect(glass, in: shape)
-                // Glass draws outside the layout bounds; expand hit-testing to match.
-                .contentShape(shape)
-        } else {
-            content
-                .background {
-                    shape.fill(.ultraThinMaterial)
-                    if let tint {
-                        shape.fill(tint.opacity(0.55))
-                    }
+        // Liquid Glass (iOS 26+) is optional; keep a material fallback so
+        // the project still builds with older SDKs (e.g. iOS 18).
+        content
+            .background {
+                shape.fill(.ultraThinMaterial)
+                if let tint {
+                    shape.fill(tint.opacity(0.55))
                 }
-                .overlay(shape.stroke(LocusTheme.panelStroke, lineWidth: 1))
-                .contentShape(shape)
-        }
-    }
-
-    @available(iOS 26.0, *)
-    private var glass: Glass {
-        var g: Glass = style == .clear ? .clear : .regular
-        if style == .interactive { g = g.interactive() }
-        if let tint { g = g.tint(tint) }
-        return g
+            }
+            .overlay(shape.stroke(LocusTheme.panelStroke, lineWidth: 1))
+            .contentShape(shape)
     }
 }
 
