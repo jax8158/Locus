@@ -180,39 +180,39 @@ final class SpoofSession: ObservableObject {
         joystickTimer = nil
     }
 
-    func followRoute(_ coordinates: [CLLocationCoordinate2D], pairing: PairingStore) {
+    func followRoute(_ coordinates: [CLLocationCoordinate2D], waypoints: [RouteWaypoint] = [], pairing: PairingStore) {
         guard pairing.hasPairingFile, coordinates.count >= 2 else { return }
         routeTask?.cancel()
         stopJoystick()
         let mode = travelMode
+        let playbackWaypoints = RouteBuilder.normalizedWaypoints(waypoints, pathCount: coordinates.count)
         routeTask = Task { [weak self] in
             guard let self else { return }
-            var previous = coordinates[0]
+            var previousIndex = 0
             await MainActor.run {
-                self.apply(previous, pairing: pairing, markRecent: true)
+                self.apply(coordinates[0], pairing: pairing, markRecent: true)
             }
-            for next in coordinates.dropFirst() {
+            for waypoint in playbackWaypoints.dropFirst() {
                 if Task.isCancelled { break }
-                let distance = CLLocation(latitude: previous.latitude, longitude: previous.longitude)
-                    .distance(from: CLLocation(latitude: next.latitude, longitude: next.longitude))
-                var speed = mode.baseSpeed * Double.random(in: 0.88...1.12)
-                speed = max(0.8, speed)
-                let stepMeters: CLLocationDistance = min(12, max(4, speed * 0.5))
-                let steps = max(1, Int(ceil(distance / stepMeters)))
-                for i in 1...steps {
+                let targetIndex = max(previousIndex + 1, waypoint.pathIndex)
+                guard targetIndex < coordinates.count else { break }
+
+                var speed = mode.baseSpeed * max(0.25, waypoint.speedMultiplier)
+                speed *= Double.random(in: 0.88...1.12)
+
+                for index in (previousIndex + 1)...targetIndex {
                     if Task.isCancelled { break }
-                    let t = Double(i) / Double(steps)
-                    let coord = CLLocationCoordinate2D(
-                        latitude: previous.latitude + (next.latitude - previous.latitude) * t,
-                        longitude: previous.longitude + (next.longitude - previous.longitude) * t
-                    )
-                    let delay = stepMeters / speed
+                    let previous = coordinates[index - 1]
+                    let next = coordinates[index]
+                    let distance = CLLocation(latitude: previous.latitude, longitude: previous.longitude)
+                        .distance(from: CLLocation(latitude: next.latitude, longitude: next.longitude))
+                    let delay = max(0.15, distance / max(0.5, speed))
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     await MainActor.run {
-                        self.apply(coord, pairing: pairing, markRecent: false)
+                        self.apply(next, pairing: pairing, markRecent: false)
                     }
                 }
-                previous = next
+                previousIndex = targetIndex
             }
         }
     }

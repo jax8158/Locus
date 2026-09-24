@@ -22,6 +22,83 @@ enum RouteBuilder {
         return sample(polyline: route.polyline, every: 12)
     }
 
+    static func defaultWaypoints(for coordinates: [CLLocationCoordinate2D]) -> [RouteWaypoint] {
+        guard !coordinates.isEmpty else { return [] }
+        guard coordinates.count > 1 else {
+            return [RouteWaypoint(pathIndex: 0, speedMultiplier: 1.0)]
+        }
+        return [
+            RouteWaypoint(pathIndex: 0, speedMultiplier: 1.0),
+            RouteWaypoint(pathIndex: coordinates.count - 1, speedMultiplier: 1.0),
+        ]
+    }
+
+    static func normalizedWaypoints(_ waypoints: [RouteWaypoint], pathCount: Int) -> [RouteWaypoint] {
+        guard pathCount > 0 else { return [] }
+
+        let clamped = waypoints
+            .map { waypoint in
+                RouteWaypoint(
+                    id: waypoint.id,
+                    pathIndex: min(max(0, waypoint.pathIndex), pathCount - 1),
+                    speedMultiplier: waypoint.speedMultiplier
+                )
+            }
+            .sorted { $0.pathIndex < $1.pathIndex }
+
+        var deduped: [RouteWaypoint] = []
+        for waypoint in clamped {
+            if let last = deduped.last, last.pathIndex == waypoint.pathIndex {
+                deduped[deduped.count - 1] = waypoint
+            } else {
+                deduped.append(waypoint)
+            }
+        }
+
+        if deduped.isEmpty {
+            if pathCount == 1 {
+                return [RouteWaypoint(pathIndex: 0, speedMultiplier: 1.0)]
+            }
+            return [
+                RouteWaypoint(pathIndex: 0, speedMultiplier: 1.0),
+                RouteWaypoint(pathIndex: pathCount - 1, speedMultiplier: 1.0),
+            ]
+        }
+
+        if deduped.first?.pathIndex != 0 {
+            deduped.insert(
+                RouteWaypoint(pathIndex: 0, speedMultiplier: deduped.first?.speedMultiplier ?? 1.0),
+                at: 0
+            )
+        }
+
+        if deduped.last?.pathIndex != pathCount - 1 {
+            deduped.append(
+                RouteWaypoint(pathIndex: pathCount - 1, speedMultiplier: deduped.last?.speedMultiplier ?? 1.0)
+            )
+        }
+
+        return deduped
+    }
+
+    static func nearestIndex(in coordinates: [CLLocationCoordinate2D], to coordinate: CLLocationCoordinate2D) -> Int {
+        guard !coordinates.isEmpty else { return 0 }
+
+        var bestIndex = 0
+        var bestDistance = CLLocationDistance.greatestFiniteMagnitude
+
+        for (index, point) in coordinates.enumerated() {
+            let distance = CLLocation(latitude: point.latitude, longitude: point.longitude)
+                .distance(from: CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude))
+            if distance < bestDistance {
+                bestDistance = distance
+                bestIndex = index
+            }
+        }
+
+        return bestIndex
+    }
+
     static func sample(polyline: MKPolyline, every meters: CLLocationDistance) -> [CLLocationCoordinate2D] {
         var coords = [CLLocationCoordinate2D](repeating: .init(), count: polyline.pointCount)
         polyline.getCoordinates(&coords, range: NSRange(location: 0, length: polyline.pointCount))

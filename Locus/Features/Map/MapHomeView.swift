@@ -12,6 +12,7 @@ struct MapHomeView: View {
     @State private var routeStart: CLLocationCoordinate2D?
     @State private var routeEnd: CLLocationCoordinate2D?
     @State private var routeCoords: [CLLocationCoordinate2D] = []
+    @State private var routeWaypoints: [RouteWaypoint] = []
     @State private var isRouting = false
     @State private var showRouteSheet = false
     @State private var showGPXImporter = false
@@ -98,6 +99,13 @@ struct MapHomeView: View {
                         MapPolyline(coordinates: routeCoords)
                             .stroke(LocusTheme.accent, lineWidth: 5)
                     }
+                    ForEach(routeWaypoints) { waypoint in
+                        if let coordinate = waypointCoordinate(for: waypoint) {
+                            Annotation("Waypoint", coordinate: coordinate, anchor: .bottom) {
+                                waypointMarker(waypoint)
+                            }
+                        }
+                    }
                     if drawnPath.count > 1 {
                         MapPolyline(coordinates: drawnPath)
                             .stroke(LocusTheme.accentSecondary, style: StrokeStyle(lineWidth: 4, dash: [6, 4]))
@@ -136,18 +144,27 @@ struct MapHomeView: View {
                 start: $routeStart,
                 end: $routeEnd,
                 isRouting: $isRouting,
+                waypoints: $routeWaypoints,
+                routePath: activeRoutePath,
                 onBuild: buildRoadRoute,
                 onPlay: playRoute,
                 onImportGPX: { showGPXImporter = true },
                 onExportGPX: exportGPX,
                 onUseDrawn: {
                     routeCoords = RouteBuilder.sample(coordinates: drawnPath, every: 10)
+                    routeWaypoints = RouteBuilder.defaultWaypoints(for: routeCoords)
                     drawnPath.removeAll()
                     drawMode = false
-                }
+                },
+                onAddWaypointAtPin: addWaypointAtPin,
+                onResetWaypoints: resetWaypoints
             )
             .presentationDetents([.medium, .large])
         }
+    }
+
+    private var activeRoutePath: [CLLocationCoordinate2D] {
+        routeCoords.isEmpty ? drawnPath : routeCoords
     }
 
     private func placePin(at point: CGPoint, proxy: MapProxy) {
@@ -366,6 +383,7 @@ struct MapHomeView: View {
                 let coords = try await RouteBuilder.roadRoute(from: start, to: end, mode: session.travelMode)
                 await MainActor.run {
                     routeCoords = coords
+                    routeWaypoints = RouteBuilder.defaultWaypoints(for: coords)
                     isRouting = false
                 }
             } catch {
@@ -378,19 +396,20 @@ struct MapHomeView: View {
     }
 
     private func playRoute() {
-        let path = routeCoords.isEmpty ? drawnPath : routeCoords
+        let path = activeRoutePath
         guard path.count >= 2 else {
             session.lastError = "Build or draw a route first."
             return
         }
         showRouteSheet = false
-        session.followRoute(path, pairing: pairing)
+        session.followRoute(path, waypoints: routeWaypoints, pairing: pairing)
     }
 
     private func importGPX(_ url: URL) {
         do {
             let coords = try GPXCodec.parse(url)
             routeCoords = RouteBuilder.sample(coordinates: coords, every: 10)
+            routeWaypoints = RouteBuilder.defaultWaypoints(for: routeCoords)
             if let first = coords.first {
                 session.pin = first
                 position = .region(MKCoordinateRegion(center: first, latitudinalMeters: 2000, longitudinalMeters: 2000))
@@ -401,7 +420,7 @@ struct MapHomeView: View {
     }
 
     private func exportGPX() {
-        let path = routeCoords.isEmpty ? drawnPath : routeCoords
+        let path = activeRoutePath
         guard !path.isEmpty else {
             session.lastError = "Nothing to export."
             return
@@ -418,6 +437,48 @@ struct MapHomeView: View {
         } catch {
             session.lastError = error.localizedDescription
         }
+    }
+
+    private func addWaypointAtPin() {
+        let path = activeRoutePath
+        guard path.count > 1 else {
+            session.lastError = "Build or draw a route first."
+            return
+        }
+        guard let coordinate = session.pin ?? session.simulated ?? session.realCoordinate else {
+            session.lastError = "Drop a pin first, then add the waypoint."
+            return
+        }
+
+        let index = RouteBuilder.nearestIndex(in: path, to: coordinate)
+        let waypoint = RouteWaypoint(pathIndex: index, speedMultiplier: 1.0)
+
+        if let existing = routeWaypoints.firstIndex(where: { $0.pathIndex == index }) {
+            routeWaypoints[existing] = waypoint
+        } else {
+            routeWaypoints.append(waypoint)
+            routeWaypoints.sort { $0.pathIndex < $1.pathIndex }
+        }
+    }
+
+    private func resetWaypoints() {
+        routeWaypoints = RouteBuilder.defaultWaypoints(for: activeRoutePath)
+    }
+
+    private func waypointCoordinate(for waypoint: RouteWaypoint) -> CLLocationCoordinate2D? {
+        guard activeRoutePath.indices.contains(waypoint.pathIndex) else { return nil }
+        return activeRoutePath[waypoint.pathIndex]
+    }
+
+    private func waypointMarker(_ waypoint: RouteWaypoint) -> some View {
+        ZStack {
+            Circle().fill(LocusTheme.accentSecondary.opacity(0.9)).frame(width: 26, height: 26)
+            Circle().stroke(.white, lineWidth: 2).frame(width: 26, height: 26)
+            Text(waypoint.speedMultiplier >= 1.0 ? "↑" : "↓")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+        }
+        .shadow(radius: 4)
     }
 }
 
